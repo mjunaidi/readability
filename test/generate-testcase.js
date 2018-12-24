@@ -7,6 +7,7 @@ var prettyPrint = require("./utils").prettyPrint;
 var serializeDocument = require("jsdom").serializeDocument;
 var http = require("http");
 var urlparse = require("url").parse;
+var htmltidy = require("htmltidy2").tidy;
 
 var readability = require("../index");
 var Readability = readability.Readability;
@@ -36,7 +37,7 @@ fs.mkdir(destRoot, function(err) {
             process.exit(1);
             return;
           }
-          onResponseReceived(data);
+          onResponseReceived(null, data);
         });
       } else {
         fetchSource(argURL, onResponseReceived);
@@ -58,7 +59,7 @@ function fetchSource(url, callbackFn) {
     client = require("https");
   }
   var options = urlparse(url);
-  options.headers = {'User-Agent': FFX_UA};
+  options.headers = {"User-Agent": FFX_UA};
 
   client.get(options, function(response) {
     if (debug) {
@@ -74,14 +75,27 @@ function fetchSource(url, callbackFn) {
       if (debug) {
         console.log("End received");
       }
-      // Sanitize:
-      rv = prettyPrint(serializeDocument(jsdom(rv)));
-      callbackFn(rv);
+      sanitizeSource(rv, callbackFn);
     });
   });
 }
 
-function onResponseReceived(source) {
+function sanitizeSource(html, callbackFn) {
+  htmltidy(serializeDocument(jsdom(html)), {
+    "indent": true,
+    "indent-spaces": 4,
+    "numeric-entities": true,
+    "output-xhtml": true,
+    "wrap": 0
+  }, callbackFn);
+}
+
+function onResponseReceived(error, source) {
+  if (error) {
+    console.error("Couldn't tidy source html!");
+    console.error(error);
+    return;
+  }
   if (debug) {
     console.log("writing");
   }
@@ -100,17 +114,13 @@ function onResponseReceived(source) {
 }
 
 function runReadability(source, destPath, metadataDestPath) {
-  var doc = new JSDOMParser().parse(source);
-  var uri = {
-    spec: "http://fakehost/test/page.html",
-    host: "fakehost",
-    prePath: "http://fakehost",
-    scheme: "http",
-    pathBase: "http://fakehost/test/"
-  };
+  var uri = "http://fakehost/test/page.html";
+  var doc = new JSDOMParser().parse(source, uri);
   var myReader, result, readerable;
   try {
-    myReader = new Readability(uri, doc);
+    // We pass `caption` as a class to check that passing in extra classes works,
+    // given that it appears in some of the test documents.
+    myReader = new Readability(doc, { classesToPreserve: ["caption"] });
     result = myReader.parse();
   } catch (ex) {
     console.error(ex);
@@ -124,7 +134,7 @@ function runReadability(source, destPath, metadataDestPath) {
         ProcessExternalResources: false
       }
     });
-    myReader = new Readability(uri, jsdomDoc);
+    myReader = new Readability(jsdomDoc);
     readerable = myReader.isProbablyReaderable();
   } catch (ex) {
     console.error(ex);
@@ -142,7 +152,6 @@ function runReadability(source, destPath, metadataDestPath) {
     }
 
     // Delete the result data we don't care about checking.
-    delete result.uri;
     delete result.content;
     delete result.textContent;
     delete result.length;
